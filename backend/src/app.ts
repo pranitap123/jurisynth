@@ -7,6 +7,10 @@ import { riskRouter } from "./routes/risk.js";
 
 export const app = express();
 
+app.use(cors({
+  origin: "https://jurisynth.vercel.app",
+  credentials: true,
+}));
 app.use(cors({ origin: config.corsOrigin, credentials: true }));
 app.use(express.json());
 

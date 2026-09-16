@@ -1,0 +1,43 @@
+version: "3.9"
+
+# Deliberately infra-only — Postgres, Neo4j, Redis. The Node API itself
+# runs directly on your machine (npm run dev), not in a container: that
+# was the actual cause of the slow build (Docker rebuilding your app image
+# and its dependencies every time). This is faster for local development;
+# containerize the API separately only when you're ready to deploy it.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jurisynth
+      POSTGRES_PASSWORD: jurisynth
+      POSTGRES_DB: jurisynth
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jurisynth"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5.24-community
+    environment:
+      NEO4J_AUTH: neo4j/jurisynth_graph
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  pg_data:
+  neo4j_data:

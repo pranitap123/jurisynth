@@ -1,0 +1,72 @@
+/*
+  v2 palette — same "case file, digitized" concept, but with actual depth:
+  a second accent (garnet) for contrast against brass, glass-surface
+  tokens for elevated panels, and glow values so key elements (the graph,
+  primary buttons) read as lit rather than flat.
+*/
+:root {
+  --ink: #0b1118;          /* primary background, deep navy-black */
+  --ink-raised: #131c26;   /* panels/cards on dark */
+  --ink-glass: rgba(19, 28, 38, 0.66); /* translucent surface, used with blur */
+  --slate: #22303f;        /* borders, dividers on dark */
+  --parchment: #f6f2e8;    /* light surface + primary text on dark */
+  --mist: #99a6b4;         /* secondary text on dark */
+
+  --brass: #c89b5c;        /* primary accent — links, active states, graph nodes */
+  --brass-dim: #8f723f;
+  --brass-glow: rgba(200, 155, 92, 0.28);
+
+  --garnet: #9c4550;       /* secondary accent — contrast highlights, risk signal */
+  --garnet-dim: #6f333b;
+  --garnet-glow: rgba(156, 69, 80, 0.25);
+
+  --ok: #4f8f68;
+
+  --font-display: "Source Serif 4", Georgia, serif;
+  --font-body: "IBM Plex Sans", -apple-system, sans-serif;
+
+  --radius: 4px;
+  --max-line: 62ch;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: var(--parchment);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* layered radial-gradient mesh — used behind the hero and section breaks
+   for depth, instead of a flat single-color background */
+.bg-mesh {
+  position: relative;
+}
+.bg-mesh::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(720px 480px at 12% -10%, var(--brass-glow), transparent 60%),
+    radial-gradient(640px 420px at 105% 15%, var(--garnet-glow), transparent 55%),
+    radial-gradient(900px 600px at 50% 120%, rgba(200,155,92,0.08), transparent 60%);
+}
+.bg-mesh > * { position: relative; z-index: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}

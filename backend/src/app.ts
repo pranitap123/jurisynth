@@ -7,11 +7,37 @@ import { riskRouter } from "./routes/risk.js";
 
 export const app = express();
 
-app.use(cors({
-  origin: "https://jurisynth.vercel.app",
-  credentials: true,
-}));
-app.use(cors({ origin: config.corsOrigin, credentials: true }));
+/*
+  Vercel gives every deployment a unique preview URL
+  (jurisynth-<hash>-<user>.vercel.app) in addition to your stable
+  production one, so a single hardcoded origin string breaks the moment
+  you redeploy. This allows:
+    - any origin listed in CORS_ORIGIN (comma-separated — put your stable
+      production URL and http://localhost:5173 there)
+    - any *.vercel.app subdomain, so preview deployments aren't blocked
+  For a private/internal app you'd tighten this to exact origins only;
+  for a public portfolio demo, allowing preview URLs is a reasonable
+  trade-off against having to update an env var on every deploy.
+*/
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true; // same-origin requests, curl, server-to-server
+  if (config.corsOrigins.includes(origin)) return true;
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true;
+  return false;
+}
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS: origin ${origin} not allowed`));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));

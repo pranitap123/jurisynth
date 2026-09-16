@@ -34,7 +34,21 @@ export const config = {
   embeddingProvider: (process.env.EMBEDDING_PROVIDER ?? "local") as "local" | "openai",
   openaiApiKey: process.env.OPENAI_API_KEY,
 
+  // Groq: genuinely free (no credit card), OpenAI-compatible API, running
+  // open-weight models (Llama 3.3 70B by default) on their LPU hardware.
+  // If GROQ_API_KEY is set, it's used for summarize/ask INSTEAD of OpenAI
+  // (checked first) — this is what most people should set, since OpenAI
+  // no longer gives free trial credit and requires billing.
   groqApiKey: process.env.GROQ_API_KEY,
 
-  corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+  // CORS_ORIGIN can be a comma-separated list (e.g. your Vercel production
+  // URL plus http://localhost:5173 for local dev). Vercel also generates a
+  // random preview URL per deployment (jurisynth-<hash>-<user>.vercel.app)
+  // that won't match any exact string here — see the corsOriginCheck
+  // function in app.ts, which additionally allows any *.vercel.app
+  // subdomain so preview deployments aren't blocked.
+  corsOrigins: (process.env.CORS_ORIGIN ?? "http://localhost:5173")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 };

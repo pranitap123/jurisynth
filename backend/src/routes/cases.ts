@@ -10,6 +10,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../core/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { asyncHandler } from "../middleware/asyncHandler.js";
 import * as retrieval from "../services/retrieval.js";
 import * as graph from "../services/graph.js";
 import * as llm from "../services/llm.js";
@@ -22,116 +23,148 @@ const createCaseSchema = z.object({
   body_text: z.string().min(1),
 });
 
-casesRouter.post("/", async (req, res) => {
-  const parsed = createCaseSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(422).json({ detail: parsed.error.issues[0].message });
-  }
-  const { title, body_text } = parsed.data;
+casesRouter.post(
+  "/",
+  asyncHandler(async (req, res) => {
+    const parsed = createCaseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(422).json({ detail: parsed.error.issues[0].message });
+    }
+    const { title, body_text } = parsed.data;
 
-  const kase = await prisma.case.create({
-    data: { ownerId: req.user!.id, title, bodyText: body_text },
-  });
+    const kase = await prisma.case.create({
+      data: { ownerId: req.user!.id, title, bodyText: body_text },
+    });
 
-  // Best-effort side indexes. If Neo4j or the vector store were down, the
-  // case is still safely in Postgres (the source of truth). Real production
-  // would retry these via a background queue instead of failing silently.
-  await Promise.all([
-    retrieval.indexCase(kase.id, req.user!.id, kase.title, kase.bodyText),
-    graph.createCaseNode(kase.id, kase.title),
-  ]);
+    // Best-effort side indexes: catch each independently so a Neo4j or
+    // vector-store outage never fails the request or the surrounding
+    // process — the case is already safely committed in Postgres, the
+    // source of truth. This used to be a bare Promise.all(), which meant
+    // either side-index failing rejected the whole request (and, before
+    // asyncHandler existed, crashed the entire server — see graph.ts and
+    // asyncHandler.ts for the full story). Real production would push
+    // these onto a retry queue instead of just logging and moving on.
+    const results = await Promise.allSettled([
+      retrieval.indexCase(kase.id, req.user!.id, kase.title, kase.bodyText),
+      graph.createCaseNode(kase.id, kase.title),
+    ]);
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        const label = i === 0 ? "retrieval index" : "graph node";
+        console.warn(`[cases] ${label} failed for case ${kase.id}:`, result.reason);
+      }
+    });
 
-  res.status(201).json({ id: kase.id, title: kase.title });
-});
+    res.status(201).json({ id: kase.id, title: kase.title });
+  })
+);
 
-casesRouter.get("/", async (req, res) => {
-  const cases = await prisma.case.findMany({
-    where: { ownerId: req.user!.id },
-    select: { id: true, title: true },
-    orderBy: { createdAt: "desc" },
-  });
-  res.json(cases);
-});
+casesRouter.get(
+  "/",
+  asyncHandler(async (req, res) => {
+    const cases = await prisma.case.findMany({
+      where: { ownerId: req.user!.id },
+      select: { id: true, title: true },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(cases);
+  })
+);
 
-casesRouter.get("/search", async (req, res) => {
-  const q = String(req.query.q ?? "");
-  const topK = Number(req.query.top_k ?? 5);
-  const results = await retrieval.search(q, req.user!.id, topK);
-  res.json(results.map((r) => ({ case_id: r.caseId, title: r.title, score: r.score })));
-});
+casesRouter.get(
+  "/search",
+  asyncHandler(async (req, res) => {
+    const q = String(req.query.q ?? "");
+    const topK = Number(req.query.top_k ?? 5);
+    const results = await retrieval.search(q, req.user!.id, topK);
+    res.json(results.map((r) => ({ case_id: r.caseId, title: r.title, score: r.score })));
+  })
+);
 
-casesRouter.post("/:caseId/link/:relatedCaseId", async (req, res) => {
-  const { caseId, relatedCaseId } = req.params;
-  const relationship = String(req.query.relationship ?? "CITES");
+casesRouter.post(
+  "/:caseId/link/:relatedCaseId",
+  asyncHandler(async (req, res) => {
+    const { caseId, relatedCaseId } = req.params;
+    const relationship = String(req.query.relationship ?? "CITES");
 
-  // Ownership check BEFORE touching the graph — otherwise a user could
-  // link cases they don't own by guessing UUIDs.
-  const owned = await prisma.case.findMany({
-    where: { ownerId: req.user!.id, id: { in: [caseId, relatedCaseId] } },
-    select: { id: true },
-  });
-  if (owned.length !== 2) {
-    return res.status(404).json({ detail: "Case not found" });
-  }
+    // Ownership check BEFORE touching the graph — otherwise a user could
+    // link cases they don't own by guessing UUIDs.
+    const owned = await prisma.case.findMany({
+      where: { ownerId: req.user!.id, id: { in: [caseId, relatedCaseId] } },
+      select: { id: true },
+    });
+    if (owned.length !== 2) {
+      return res.status(404).json({ detail: "Case not found" });
+    }
 
-  try {
-    await graph.linkCases(caseId, relatedCaseId, relationship);
-    res.json({ linked: true });
-  } catch (err) {
-    res.status(422).json({ detail: (err as Error).message });
-  }
-});
+    try {
+      await graph.linkCases(caseId, relatedCaseId, relationship);
+      res.json({ linked: true });
+    } catch (err) {
+      res.status(422).json({ detail: (err as Error).message });
+    }
+  })
+);
 
-casesRouter.get("/:caseId/related", async (req, res) => {
-  const { caseId } = req.params;
-  const maxHops = Number(req.query.max_hops ?? 2);
+casesRouter.get(
+  "/:caseId/related",
+  asyncHandler(async (req, res) => {
+    const { caseId } = req.params;
+    const maxHops = Number(req.query.max_hops ?? 2);
 
-  const kase = await prisma.case.findFirst({
-    where: { id: caseId, ownerId: req.user!.id },
-  });
-  if (!kase) {
-    return res.status(404).json({ detail: "Case not found" });
-  }
+    const kase = await prisma.case.findFirst({
+      where: { id: caseId, ownerId: req.user!.id },
+    });
+    if (!kase) {
+      return res.status(404).json({ detail: "Case not found" });
+    }
 
-  const related = await graph.findRelatedCases(caseId, maxHops);
-  res.json(related);
-});
+    const related = await graph.findRelatedCases(caseId, maxHops);
+    res.json(related);
+  })
+);
 
-casesRouter.post("/:caseId/summarize", async (req, res) => {
-  const kase = await prisma.case.findFirst({
-    where: { id: req.params.caseId, ownerId: req.user!.id },
-  });
-  if (!kase) {
-    return res.status(404).json({ detail: "Case not found" });
-  }
+casesRouter.post(
+  "/:caseId/summarize",
+  asyncHandler(async (req, res) => {
+    const kase = await prisma.case.findFirst({
+      where: { id: req.params.caseId, ownerId: req.user!.id },
+    });
+    if (!kase) {
+      return res.status(404).json({ detail: "Case not found" });
+    }
 
-  try {
-    const result = await llm.summarizeCase(kase.title, kase.bodyText);
-    res.json({ summary: result.summary, key_issues: result.keyIssues, mode: result.mode });
-  } catch (err) {
-    res.status(502).json({ detail: `Summarization failed: ${(err as Error).message}` });
-  }
-});
+    try {
+      const result = await llm.summarizeCase(kase.title, kase.bodyText);
+      res.json({ summary: result.summary, key_issues: result.keyIssues, mode: result.mode });
+    } catch (err) {
+      res.status(502).json({ detail: `Summarization failed: ${(err as Error).message}` });
+    }
+  })
+);
 
 const askSchema = z.object({ question: z.string().min(1) });
 
-casesRouter.post("/:caseId/ask", async (req, res) => {
-  const parsed = askSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(422).json({ detail: parsed.error.issues[0].message });
-  }
+casesRouter.post(
+  "/:caseId/ask",
+  asyncHandler(async (req, res) => {
+    const parsed = askSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(422).json({ detail: parsed.error.issues[0].message });
+    }
 
-  const kase = await prisma.case.findFirst({
-    where: { id: req.params.caseId, ownerId: req.user!.id },
-  });
-  if (!kase) {
-    return res.status(404).json({ detail: "Case not found" });
-  }
+    const kase = await prisma.case.findFirst({
+      where: { id: req.params.caseId, ownerId: req.user!.id },
+    });
+    if (!kase) {
+      return res.status(404).json({ detail: "Case not found" });
+    }
 
-  try {
-    const result = await llm.answerQuestion(parsed.data.question, kase.bodyText);
-    res.json({ answer: result.answer, mode: result.mode });
-  } catch (err) {
-    res.status(502).json({ detail: `Question answering failed: ${(err as Error).message}` });
-  }
-});
+    try {
+      const result = await llm.answerQuestion(parsed.data.question, kase.bodyText);
+      res.json({ answer: result.answer, mode: result.mode });
+    } catch (err) {
+      res.status(502).json({ detail: `Question answering failed: ${(err as Error).message}` });
+    }
+  })
+);

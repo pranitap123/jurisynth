@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../core/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { asyncHandler } from "../middleware/asyncHandler.js";
 import {
   hashPassword,
   verifyPassword,
@@ -18,7 +19,7 @@ const signupSchema = z.object({
   password: z.string().min(8),
 });
 
-authRouter.post("/signup", async (req, res) => {
+authRouter.post("/signup", asyncHandler(async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(422).json({ detail: parsed.error.issues[0].message });
@@ -35,7 +36,7 @@ authRouter.post("/signup", async (req, res) => {
   });
 
   res.status(201).json({ access_token: createAccessToken(user.id) });
-});
+}));
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -43,7 +44,7 @@ const loginSchema = z.object({
   totp_code: z.string().optional(),
 });
 
-authRouter.post("/login", async (req, res) => {
+authRouter.post("/login", asyncHandler(async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(422).json({ detail: parsed.error.issues[0].message });
@@ -69,17 +70,17 @@ authRouter.post("/login", async (req, res) => {
   }
 
   res.json({ access_token: createAccessToken(user.id) });
-});
+}));
 
-authRouter.post("/mfa/enroll", requireAuth, async (req, res) => {
+authRouter.post("/mfa/enroll", requireAuth, asyncHandler(async (req, res) => {
   const secret = generateTotpSecret();
   await prisma.user.update({ where: { id: req.user!.id }, data: { totpSecret: secret } });
   res.json({ provisioning_uri: getTotpProvisioningUri(secret, req.user!.email) });
-});
+}));
 
 const verifyMfaSchema = z.object({ totp_code: z.string() });
 
-authRouter.post("/mfa/verify", requireAuth, async (req, res) => {
+authRouter.post("/mfa/verify", requireAuth, asyncHandler(async (req, res) => {
   const parsed = verifyMfaSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(422).json({ detail: parsed.error.issues[0].message });
@@ -95,4 +96,4 @@ authRouter.post("/mfa/verify", requireAuth, async (req, res) => {
 
   await prisma.user.update({ where: { id: user.id }, data: { mfaEnabled: true } });
   res.json({ mfa_enabled: true });
-});
+}));

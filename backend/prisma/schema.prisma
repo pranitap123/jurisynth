@@ -1,0 +1,49 @@
+// WHY these three tables: same shape as the Python version's SQLAlchemy
+// models — User owns Cases (per-user isolation enforced in route code via
+// ownerId, not by the schema alone), and RiskAssessment is an append-only
+// log of scores rather than a field overwritten on the Case, so you keep
+// a full audit trail of every prediction ever made.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  hashedPassword String
+  totpSecret     String?
+  mfaEnabled     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  cases Case[]
+}
+
+model Case {
+  id        String   @id @default(uuid())
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id])
+  title     String
+  bodyText  String
+  createdAt DateTime @default(now())
+
+  riskAssessments RiskAssessment[]
+
+  @@index([ownerId])
+}
+
+model RiskAssessment {
+  id           String   @id @default(uuid())
+  caseId       String
+  case         Case     @relation(fields: [caseId], references: [id])
+  riskScore    Float
+  modelVersion String
+  createdAt    DateTime @default(now())
+
+  @@index([caseId])
+}
